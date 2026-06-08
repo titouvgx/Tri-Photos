@@ -1,13 +1,34 @@
 """
-tri_medias.py - V1.4
+tri_medias.py - V1.5
 Trie toutes les photos et vidéos d'un dossier source (récursivement)
 dans un dossier "Tri Officiel (YYYY-MM-DD)" par Année > Mois.
 Les fichiers originaux ne sont PAS supprimés.
 """
 
+import sys
+import os
+import traceback
+
+# Intercepte tout crash avant même les imports — fenêtre reste ouverte
+def _on_crash(exc_type, exc_value, exc_tb):
+    print("\n" + "=" * 55)
+    print("ERREUR AU LANCEMENT :")
+    traceback.print_exception(exc_type, exc_value, exc_tb)
+    print("=" * 55)
+    # Log à côté de l'exe pour debug
+    try:
+        base = os.path.dirname(sys.executable if getattr(sys, "frozen", False) else __file__)
+        with open(os.path.join(base, "erreur_lancement.log"), "w", encoding="utf-8") as f:
+            traceback.print_exception(exc_type, exc_value, exc_tb, file=f)
+        print(f"Log écrit dans : {base}\\erreur_lancement.log")
+    except Exception:
+        pass
+    input("\nAppuie sur Entrée pour fermer...")
+
+sys.excepthook = _on_crash
+
 import argparse
 import shutil
-import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -16,6 +37,7 @@ try:
     from PIL.ExifTags import TAGS
 except ImportError:
     print("Pillow non installé. Lance : pip install Pillow pillow-heif rich")
+    input("\nAppuie sur Entrée pour fermer...")
     sys.exit(1)
 
 try:
@@ -33,9 +55,9 @@ try:
     )
     from rich.table import Table
     from rich import box
-    from rich.text import Text
 except ImportError:
     print("rich non installé. Lance : pip install rich")
+    input("\nAppuie sur Entrée pour fermer...")
     sys.exit(1)
 
 try:
@@ -306,10 +328,15 @@ if __name__ == "__main__":
             padding=(1, 3),
         ))
         console.print()
-        source = console.input("[bold]📂 Chemin du dossier à trier :[/] ").strip().strip('"')
-        dry = console.input("[bold]🧪 Dry-run ? (o/n) :[/] ").strip().lower()
-        args.source = source
+        # input() standard — plus fiable que console.input() en double-clic
+        args.source = input("📂 Chemin du dossier à trier : ").strip().strip('"')
+        dry = input("🧪 Dry-run ? (o/n) : ").strip().lower()
         args.dry_run = dry in ("o", "oui", "y", "yes")
 
-    trier_medias(args.source, dry_run=args.dry_run)
-    input("\nAppuie sur Entrée pour fermer...")
+    try:
+        trier_medias(args.source, dry_run=args.dry_run)
+    except Exception as e:
+        print(f"\nErreur : {e}")
+        traceback.print_exc()
+    finally:
+        input("\nAppuie sur Entrée pour fermer...")
