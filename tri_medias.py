@@ -292,8 +292,24 @@ def trier_medias(dossier_source: str, dry_run: bool = False):
 # -------------------------------------------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Trie photos et vidéos par Année > Mois.")
-    parser.add_argument("source", help="Dossier source à trier")
+    parser.add_argument("source", nargs="?", help="Dossier source à trier")
     parser.add_argument("--dry-run", action="store_true", help="Simule le tri sans copier aucun fichier")
     args = parser.parse_args()
 
+    # Mode interactif si double-clic (aucun argument fourni)
+    if not args.source:
+        console.print()
+        console.print(Panel.fit(
+            "[bold cyan]📷 TRI MÉDIAS[/]\n"
+            "[dim]Aucun dossier spécifié — mode interactif[/]",
+            border_style="cyan",
+            padding=(1, 3),
+        ))
+        console.print()
+        source = console.input("[bold]📂 Chemin du dossier à trier :[/] ").strip().strip('"')
+        dry = console.input("[bold]🧪 Dry-run ? (o/n) :[/] ").strip().lower()
+        args.source = source
+        args.dry_run = dry in ("o", "oui", "y", "yes")
+
     trier_medias(args.source, dry_run=args.dry_run)
+    input("\nAppuie sur Entrée pour fermer...")
