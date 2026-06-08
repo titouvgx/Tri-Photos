@@ -1,5 +1,5 @@
 """
-tri_medias.py - V1.5
+tri_medias.py - V1.6
 Trie toutes les photos et vidéos d'un dossier source (récursivement)
 dans un dossier "Tri Officiel (YYYY-MM-DD)" par Année > Mois.
 Les fichiers originaux ne sont PAS supprimés.
@@ -9,18 +9,21 @@ import sys
 import os
 import traceback
 
-# Intercepte tout crash avant même les imports — fenêtre reste ouverte
+# Active les couleurs ANSI sur Windows 10/11
+os.system("")
+
+# Intercepte tout crash — la fenêtre reste toujours ouverte
 def _on_crash(exc_type, exc_value, exc_tb):
     print("\n" + "=" * 55)
     print("ERREUR AU LANCEMENT :")
     traceback.print_exception(exc_type, exc_value, exc_tb)
     print("=" * 55)
-    # Log à côté de l'exe pour debug
     try:
-        base = os.path.dirname(sys.executable if getattr(sys, "frozen", False) else __file__)
-        with open(os.path.join(base, "erreur_lancement.log"), "w", encoding="utf-8") as f:
+        base = os.path.dirname(sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__))
+        log = os.path.join(base, "erreur_lancement.log")
+        with open(log, "w", encoding="utf-8") as f:
             traceback.print_exception(exc_type, exc_value, exc_tb, file=f)
-        print(f"Log écrit dans : {base}\\erreur_lancement.log")
+        print(f"Log écrit : {log}")
     except Exception:
         pass
     input("\nAppuie sur Entrée pour fermer...")
@@ -33,30 +36,17 @@ from datetime import datetime
 from pathlib import Path
 
 try:
-    from PIL import Image
-    from PIL.ExifTags import TAGS
+    from tqdm import tqdm
 except ImportError:
-    print("Pillow non installé. Lance : pip install Pillow pillow-heif rich")
+    print("tqdm non installé. Lance : pip install tqdm Pillow pillow-heif")
     input("\nAppuie sur Entrée pour fermer...")
     sys.exit(1)
 
 try:
-    from rich.console import Console
-    from rich.panel import Panel
-    from rich.progress import (
-        BarColumn,
-        MofNCompleteColumn,
-        Progress,
-        SpinnerColumn,
-        TaskProgressColumn,
-        TextColumn,
-        TimeElapsedColumn,
-        TimeRemainingColumn,
-    )
-    from rich.table import Table
-    from rich import box
+    from PIL import Image
+    from PIL.ExifTags import TAGS
 except ImportError:
-    print("rich non installé. Lance : pip install rich")
+    print("Pillow non installé. Lance : pip install Pillow pillow-heif tqdm")
     input("\nAppuie sur Entrée pour fermer...")
     sys.exit(1)
 
@@ -67,8 +57,33 @@ try:
 except ImportError:
     HEIC_SUPPORTE = False
 
-console = Console()
+# -------------------------------------------------------
+# ANSI
+# -------------------------------------------------------
+CYAN   = "\033[96m"
+GREEN  = "\033[92m"
+YELLOW = "\033[93m"
+RED    = "\033[91m"
+BOLD   = "\033[1m"
+DIM    = "\033[2m"
+RESET  = "\033[0m"
 
+def c(texte, couleur):
+    return f"{couleur}{texte}{RESET}"
+
+def box(titre, lignes, couleur=CYAN):
+    largeur = max(len(titre), max(len(l) for l in lignes)) + 4
+    sep = couleur + "─" * largeur + RESET
+    print(f"\n{couleur}┌{sep}┐{RESET}")
+    print(f"{couleur}│{RESET} {BOLD}{titre}{RESET}{' ' * (largeur - len(titre) - 1)}{couleur}│{RESET}")
+    print(f"{couleur}├{sep}┤{RESET}")
+    for ligne in lignes:
+        print(f"{couleur}│{RESET} {ligne}{' ' * (largeur - len(ligne) - 1)}{couleur}│{RESET}")
+    print(f"{couleur}└{sep}┘{RESET}\n")
+
+# -------------------------------------------------------
+# FORMATS SUPPORTÉS
+# -------------------------------------------------------
 EXTENSIONS_IMAGES = {
     ".jpg", ".jpeg", ".png", ".heic", ".heif", ".bmp", ".gif",
     ".tiff", ".tif", ".webp", ".raw", ".cr2", ".cr3", ".nef",
@@ -130,8 +145,7 @@ def chemin_sans_conflit(dossier: Path, fichier_source: Path) -> Path | None:
         return cible
     if deja_copie(fichier_source, cible):
         return None
-    stem = fichier_source.stem
-    suffix = fichier_source.suffix
+    stem, suffix = fichier_source.stem, fichier_source.suffix
     compteur = 2
     while True:
         nouveau = dossier / f"{stem}_{compteur}{suffix}"
@@ -149,72 +163,47 @@ def trier_medias(dossier_source: str, dry_run: bool = False):
     source = Path(dossier_source).resolve()
 
     if not source.exists():
-        console.print(f"\n[bold red]✗ Dossier introuvable :[/] {source}\n")
-        sys.exit(1)
-
-    date_du_jour = datetime.now().strftime("%Y-%m-%d")
-    nom_destination = f"Tri Officiel ({date_du_jour})"
-    destination = source.parent / nom_destination
-
-    # En-tête
-    titre = "🧪 TRI MÉDIAS — DRY RUN" if dry_run else "📷 TRI MÉDIAS"
-    console.print()
-    console.print(Panel.fit(
-        f"[bold cyan]{titre}[/]\n"
-        f"[dim]Source      :[/] {source}\n"
-        f"[dim]Destination :[/] {destination}"
-        + ("\n\n[bold yellow]Aucun fichier ne sera copié[/]" if dry_run else ""),
-        border_style="cyan",
-        padding=(1, 3),
-    ))
-    console.print()
-
-    if not HEIC_SUPPORTE:
-        console.print("[yellow]⚠ pillow-heif non installé — HEIC/HEIF (iPhone) classés via date de modification.[/]")
-        console.print("[dim]  Pour corriger : pip install pillow-heif[/]\n")
-
-    # Scan
-    with console.status("[cyan]Scan en cours...[/]", spinner="dots"):
-        tous_les_fichiers = [
-            f for f in source.rglob("*")
-            if f.is_file()
-            and f.suffix.lower() in EXTENSIONS_SUPPORTEES
-            and not f.is_relative_to(destination)
-        ]
-
-    total = len(tous_les_fichiers)
-    console.print(f"[bold]📸 {total} fichiers trouvés[/]\n")
-
-    if total == 0:
-        console.print("[yellow]Aucun fichier média trouvé. Vérifie le dossier source.[/]")
+        print(c(f"\n✗ Dossier introuvable : {source}\n", RED))
         return
 
-    copiés = 0
-    ignorés = 0
-    conflits = 0
-    date_non_fiable = 0
-    erreurs = 0
+    date_du_jour = datetime.now().strftime("%Y-%m-%d")
+    destination = source.parent / f"Tri Officiel ({date_du_jour})"
+
+    titre = "TRI MÉDIAS — DRY RUN" if dry_run else "📷 TRI MÉDIAS"
+    lignes = [
+        f"Source      : {source}",
+        f"Destination : {destination}",
+    ]
+    if dry_run:
+        lignes.append(c("Aucun fichier ne sera copié", YELLOW))
+    box(titre, lignes)
+
+    if not HEIC_SUPPORTE:
+        print(c("⚠  pillow-heif non installé — HEIC/HEIF classés via date de modification.", YELLOW))
+        print(c("   Pour corriger : pip install pillow-heif\n", DIM))
+
+    print(c("Scan en cours...", CYAN), end=" ", flush=True)
+    tous_les_fichiers = [
+        f for f in source.rglob("*")
+        if f.is_file()
+        and f.suffix.lower() in EXTENSIONS_SUPPORTEES
+        and not f.is_relative_to(destination)
+    ]
+    print(c(f"{len(tous_les_fichiers)} fichiers trouvés\n", BOLD))
+
+    total = len(tous_les_fichiers)
+    if total == 0:
+        print(c("Aucun fichier média trouvé. Vérifie le dossier source.", YELLOW))
+        return
+
+    copiés = ignorés = conflits = date_non_fiable = erreurs = 0
     années_trouvées = set()
     log_erreurs = []
 
-    # Barre de progression
-    progress = Progress(
-        SpinnerColumn(),
-        TextColumn("[bold cyan]{task.description}[/]", justify="left"),
-        BarColumn(bar_width=35, style="cyan", complete_style="bold green"),
-        TaskProgressColumn(),
-        MofNCompleteColumn(),
-        TimeElapsedColumn(),
-        TimeRemainingColumn(),
-        console=console,
-        expand=False,
-    )
-
-    with progress:
-        tache = progress.add_task("Tri en cours", total=total)
-
+    with tqdm(total=total, unit="fich.", ncols=80, colour="cyan",
+              bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]") as barre:
         for fichier in tous_les_fichiers:
-            progress.update(tache, description=fichier.name[:35].ljust(35))
+            barre.set_description(fichier.name[:30].ljust(30))
             try:
                 date, fiable = get_date(fichier)
                 if not fiable:
@@ -241,54 +230,38 @@ def trier_medias(dossier_source: str, dry_run: bool = False):
                 erreurs += 1
                 log_erreurs.append(f"ERREUR : {fichier} — {e}")
 
-            progress.advance(tache)
+            barre.update(1)
 
     # -------------------------------------------------------
-    # RAPPORT FINAL
+    # RAPPORT
     # -------------------------------------------------------
-    console.print()
+    action = "À copier  " if dry_run else "Copiés    "
+    dry_label = " (DRY RUN)" if dry_run else ""
 
-    table = Table(
-        box=box.ROUNDED,
-        border_style="cyan",
-        show_header=False,
-        padding=(0, 2),
-        title="[bold]Rapport de tri[/]" + (" [yellow](DRY RUN)[/]" if dry_run else ""),
-        title_style="bold cyan",
-    )
-    table.add_column(justify="left",  style="dim")
-    table.add_column(justify="right", style="bold")
+    def stat(label, val, couleur=None):
+        s = f"{label} : {val}"
+        return c(s, couleur) if couleur else s
 
-    action = "À copier" if dry_run else "Copiés"
-    table.add_row("📸 Total trouvé",      str(total))
-    table.add_row(f"✅ {action}",         f"[green]{copiés}[/]")
-    table.add_row("⏭  Déjà présents",    f"[dim]{ignorés}[/]")
-    table.add_row("🔄 Conflits renommés", f"[yellow]{conflits}[/]" if conflits else "0")
-    table.add_row("⚠  Dates non fiables", f"[yellow]{date_non_fiable}[/]" if date_non_fiable else "0")
-    table.add_row("❌ Erreurs",           f"[red]{erreurs}[/]" if erreurs else "[green]0[/]")
-    table.add_row("📅 Années trouvées",   ", ".join(sorted(années_trouvées)))
-    table.add_row("📁 Résultat dans",     str(destination))
-
-    console.print(table)
+    lignes_rapport = [
+        stat(f"✅ {action}", copiés, GREEN),
+        stat("⏭  Déjà présents  ", ignorés, DIM),
+        stat("🔄 Conflits renommés", conflits, YELLOW if conflits else None),
+        stat("⚠  Dates non fiables", date_non_fiable, YELLOW if date_non_fiable else None),
+        stat("❌ Erreurs          ", erreurs, RED if erreurs else GREEN),
+        stat("📅 Années trouvées  ", ", ".join(sorted(années_trouvées))),
+        stat("📁 Résultat dans    ", str(destination)),
+    ]
+    box(f"Rapport de tri{dry_label}", lignes_rapport)
 
     if date_non_fiable > 0:
-        console.print()
-        console.print(Panel(
-            f"[yellow]{date_non_fiable} fichier(s) classés via date de modification[/]\n"
-            "[dim]Vidéos ou images sans EXIF — la date peut être inexacte si les fichiers\n"
-            "ont été transférés ou synchronisés via cloud. Vérifie manuellement.[/]",
-            title="[yellow]⚠ Attention[/]",
-            border_style="yellow",
-            padding=(0, 2),
-        ))
+        print(c(f"⚠  {date_non_fiable} fichier(s) classés via date de modification", YELLOW))
+        print(c("   (vidéos/images sans EXIF — peut être inexact si transféré via cloud)\n", DIM))
 
     if not dry_run:
         destination.mkdir(parents=True, exist_ok=True)
-
         rapport_path = destination / f"rapport_{date_du_jour}.txt"
         with open(rapport_path, "w", encoding="utf-8") as f:
-            f.write(f"Rapport de tri — {date_du_jour}\n")
-            f.write("=" * 50 + "\n")
+            f.write(f"Rapport de tri — {date_du_jour}\n{'='*50}\n")
             f.write(f"Total trouvé       : {total}\n")
             f.write(f"Copiés             : {copiés}\n")
             f.write(f"Déjà présents      : {ignorés}\n")
@@ -297,16 +270,13 @@ def trier_medias(dossier_source: str, dry_run: bool = False):
             f.write(f"Erreurs            : {erreurs}\n")
             f.write(f"Années trouvées    : {', '.join(sorted(années_trouvées))}\n")
             f.write(f"Résultat dans      : {destination}\n")
-
-        console.print(f"\n[dim]📄 Rapport : {rapport_path}[/]")
+        print(c(f"📄 Rapport : {rapport_path}", DIM))
 
         if log_erreurs:
             log_path = destination / "erreurs.log"
             with open(log_path, "w", encoding="utf-8") as f:
                 f.write("\n".join(log_erreurs))
-            console.print(f"[dim]📋 Erreurs : {log_path}[/]")
-
-    console.print()
+            print(c(f"📋 Erreurs : {log_path}", DIM))
 
 
 # -------------------------------------------------------
@@ -315,28 +285,20 @@ def trier_medias(dossier_source: str, dry_run: bool = False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Trie photos et vidéos par Année > Mois.")
     parser.add_argument("source", nargs="?", help="Dossier source à trier")
-    parser.add_argument("--dry-run", action="store_true", help="Simule le tri sans copier aucun fichier")
+    parser.add_argument("--dry-run", action="store_true", help="Simule le tri sans copier")
     args = parser.parse_args()
 
-    # Mode interactif si double-clic (aucun argument fourni)
     if not args.source:
-        console.print()
-        console.print(Panel.fit(
-            "[bold cyan]📷 TRI MÉDIAS[/]\n"
-            "[dim]Aucun dossier spécifié — mode interactif[/]",
-            border_style="cyan",
-            padding=(1, 3),
-        ))
-        console.print()
-        # input() standard — plus fiable que console.input() en double-clic
-        args.source = input("📂 Chemin du dossier à trier : ").strip().strip('"')
-        dry = input("🧪 Dry-run ? (o/n) : ").strip().lower()
+        print(f"\n{BOLD}{CYAN}📷 TRI MÉDIAS{RESET}")
+        print(f"{DIM}─────────────────────────────{RESET}\n")
+        args.source = input("📂 Dossier à trier : ").strip().strip('"')
+        dry = input("🧪 Dry-run ? (o/n)  : ").strip().lower()
         args.dry_run = dry in ("o", "oui", "y", "yes")
 
     try:
         trier_medias(args.source, dry_run=args.dry_run)
     except Exception as e:
-        print(f"\nErreur : {e}")
+        print(c(f"\nErreur : {e}", RED))
         traceback.print_exc()
     finally:
         input("\nAppuie sur Entrée pour fermer...")
